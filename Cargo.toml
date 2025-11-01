@@ -1,0 +1,9 @@
+[package]
+name = "lietuviu-zodynas"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+clap = "4.5.51"
+html_parser = "0.7.0"
+tabled = "0.20.0"
