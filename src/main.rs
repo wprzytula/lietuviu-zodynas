@@ -1,4 +1,4 @@
-use lietuviu_zodynas::{AccentuationError, accentuate_api, new_session};
+use lietuviu_zodynas::kirciavimas::{AccentuationError, accentuate_api, new_session};
 
 const WORD_ARG: &str = "word";
 const NEW_SESSION_ARG: &str = "new_session";
