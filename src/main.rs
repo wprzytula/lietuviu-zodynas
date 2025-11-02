@@ -33,15 +33,26 @@ fn main() {
         return;
     };
 
-    let maybe_csrf_token = matches.get_flag(NEW_SESSION_ARG).then(|| {
-        eprintln!("Starting a new session...");
-        new_session()
-    });
+    let mut start_new_session = matches.get_flag(NEW_SESSION_ARG);
 
-    match accentuate_api(word, maybe_csrf_token) {
-        Ok(accentuated) => println!("{}", accentuated.as_tabled()),
-        Err(AccentuationError::NoSuchWord) => eprintln!("Tokio žodžio nėra!"),
-        Err(AccentuationError::SessionExpired) => eprintln!("Sesijos pasibaigė!"),
-        Err(AccentuationError::ServerError) => eprintln!("Serverio klaida!"),
-    };
+    loop {
+        let maybe_csrf_token = start_new_session.then(|| {
+            // Starting a new session.
+            eprintln!("Pradedama nauja sesija...");
+            new_session()
+        });
+
+        match accentuate_api(word, maybe_csrf_token) {
+            Ok(accentuated) => println!("{}", accentuated.as_tabled()),
+            Err(AccentuationError::NoSuchWord) => eprintln!("Tokio žodžio nėra!"),
+            Err(AccentuationError::SessionExpired) => {
+                eprintln!("Sesijos pasibaigė! Nauja sesija bus pradėta.");
+                start_new_session = true;
+                continue;
+            }
+            Err(AccentuationError::ServerError) => eprintln!("Serverio klaida!"),
+        };
+
+        break;
+    }
 }
