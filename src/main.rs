@@ -1,4 +1,4 @@
-use lietuviu_zodynas::{accentuate_api, new_session};
+use lietuviu_zodynas::{AccentuationError, accentuate_api, new_session};
 
 const WORD_ARG: &str = "word";
 const NEW_SESSION_ARG: &str = "new_session";
@@ -17,7 +17,7 @@ fn main() {
             )
             .arg(
                 clap::Arg::new(NEW_SESSION_ARG)
-                    .help("Start a new session")
+                    .help("Start a new session. Required once every some time to obtain a new CSRF token")
                     .short('n')
                     .long("new-session")
                     .num_args(0)
@@ -38,9 +38,9 @@ fn main() {
         new_session()
     });
 
-    let Some(accentuated) = accentuate_api(word, maybe_csrf_token) else {
-        eprintln!("Tokio žodžio nėra!");
-        return;
+    match accentuate_api(word, maybe_csrf_token) {
+        Ok(accentuated) => println!("{}", accentuated.as_tabled()),
+        Err(AccentuationError::NoSuchWord) => eprintln!("Tokio žodžio nėra!"),
+        Err(AccentuationError::SessionExpired) => eprintln!("Sesijos pasibaigė!"),
     };
-    println!("{}", accentuated.as_tabled());
 }

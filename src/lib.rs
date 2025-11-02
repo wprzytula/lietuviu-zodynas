@@ -51,7 +51,10 @@ pub fn new_session() -> CsrfToken {
     CsrfToken::new(String::from_utf8(csrf_token.stdout).expect("Failed to parse CSRF token"))
 }
 
-pub fn accentuate_api(word: &str, csrf_token: Option<CsrfToken>) -> Option<AccentuationOutput> {
+pub fn accentuate_api(
+    word: &str,
+    csrf_token: Option<CsrfToken>,
+) -> Result<AccentuationOutput, AccentuationError> {
     // http --session lietuviu-zodynas POST 'https://rasyba.lietuviuzodynas.lt/api/accentuate/names' text="$WORD"
 
     let mut cmd = Command::new("http");
@@ -84,9 +87,13 @@ pub fn accentuate_api(word: &str, csrf_token: Option<CsrfToken>) -> Option<Accen
     let html =
         String::from_utf8(http_response.stdout).expect("Failed to parse API accentuation stdout");
 
+    if html.contains("CSRF token mismatch.") {
+        return Err(AccentuationError::SessionExpired);
+    }
+
     let dom = html_parser::Dom::parse(&html).expect("Failed to parse HTML");
 
-    std::panic::catch_unwind(|| AccentuationOutput::from_html(&dom)).unwrap_or_else(|panic| {
+    std::panic::catch_unwind(|| AccentuationOutput::try_from_html(&dom)).unwrap_or_else(|panic| {
         eprintln!("Failed to parse accentuation output. DOM: {:#?}", dom);
         std::panic::resume_unwind(panic);
     })
@@ -103,9 +110,25 @@ pub struct AccentuationVariant {
     pub valid_forms: Vec<GrammaticalForm>,
 }
 
+#[derive(Debug)]
+pub enum AccentuationError {
+    NoSuchWord,
+    SessionExpired,
+}
+
 impl AccentuationOutput {
-    fn from_html(dom: &html_parser::Dom) -> Option<Self> {
-        dom.children.first().unwrap().element().map(Into::into)
+    fn try_from_html(dom: &html_parser::Dom) -> Result<Self, AccentuationError> {
+        let first_child = dom.children.first().unwrap();
+        if let Some(first_child_element) = first_child.element() {
+            return Ok(first_child_element.into());
+        }
+
+        if let Some(text) = first_child.text() {
+            assert_eq!(text, "žodis nerastas");
+            return Err(AccentuationError::NoSuchWord);
+        }
+
+        panic!("Unexpected DOM structure: {:#?}", dom);
     }
 }
 
