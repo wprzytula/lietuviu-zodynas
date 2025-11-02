@@ -42,5 +42,6 @@ fn main() {
         Ok(accentuated) => println!("{}", accentuated.as_tabled()),
         Err(AccentuationError::NoSuchWord) => eprintln!("Tokio žodžio nėra!"),
         Err(AccentuationError::SessionExpired) => eprintln!("Sesijos pasibaigė!"),
+        Err(AccentuationError::ServerError) => eprintln!("Serverio klaida!"),
     };
 }

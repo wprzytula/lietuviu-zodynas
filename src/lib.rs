@@ -114,6 +114,7 @@ pub struct AccentuationVariant {
 pub enum AccentuationError {
     NoSuchWord,
     SessionExpired,
+    ServerError,
 }
 
 impl AccentuationOutput {
@@ -124,8 +125,13 @@ impl AccentuationOutput {
         }
 
         if let Some(text) = first_child.text() {
-            assert_eq!(text, "žodis nerastas");
-            return Err(AccentuationError::NoSuchWord);
+            if text.contains("žodis nerastas") {
+                return Err(AccentuationError::NoSuchWord);
+            }
+
+            if text.contains("Server Error") {
+                return Err(AccentuationError::ServerError);
+            }
         }
 
         panic!("Unexpected DOM structure: {:#?}", dom);
