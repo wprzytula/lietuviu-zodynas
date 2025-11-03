@@ -1,4 +1,6 @@
+mod html_ext;
 pub mod kirciavimas;
+pub mod zodzio_formos;
 
 const SESSION_NAME: &str = "lietuviu-zodynas";
 
