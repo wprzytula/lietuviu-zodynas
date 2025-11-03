@@ -5,6 +5,8 @@ use std::{
     process::{Command, Stdio},
 };
 
+use crate::html_ext::NodeExt;
+
 use super::{CsrfToken, SESSION_NAME};
 
 const SITE_URL: &str = "https://rasyba.lietuviuzodynas.lt/kirciavimas-internetu";
@@ -166,22 +168,13 @@ impl AccentuationOutput {
 impl From<&html_parser::Element> for AccentuationOutput {
     fn from(value: &html_parser::Element) -> Self {
         let (chunks, remainder) = value.children.as_chunks();
-        assert!(
-            remainder.is_empty(),
-            "Unexpected odd children number in accentuation output"
-        );
 
         let variants = chunks
             .iter()
             .map(|[word, morf]| {
                 let accentuated_word = word
-                    .element()
+                    .extract_self_or_first_child_as_text()
                     .unwrap()
-                    .children
-                    .first()
-                    .unwrap()
-                    .text()
-                    .unwrap_or_else(|| panic!("No text in {:#?}", word))
                     .to_owned();
                 let forms = morf
                     .element()
@@ -195,6 +188,16 @@ impl From<&html_parser::Element> for AccentuationOutput {
                     valid_forms: forms,
                 }
             })
+            .chain(remainder.first().map(|word| {
+                let accentuated_word = word
+                    .extract_self_or_first_child_as_text()
+                    .unwrap()
+                    .to_owned();
+                AccentuationVariant {
+                    accentuated_word,
+                    valid_forms: Vec::new(),
+                }
+            }))
             .collect();
 
         Self { variants }
