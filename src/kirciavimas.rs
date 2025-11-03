@@ -3,6 +3,7 @@ use std::{
     io::pipe,
     os::fd::{AsRawFd, FromRawFd},
     process::{Command, Stdio},
+    str::FromStr,
 };
 
 use crate::html_ext::NodeExt;
@@ -207,17 +208,169 @@ impl From<&html_parser::Element> for AccentuationOutput {
 #[derive(Debug)]
 pub struct GrammaticalForm {
     pub form: String,
+    pub part_of_speech: PartOfSpeech,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum PartOfSpeech {
+    // dkt., vyr. g., vns. vard.
+    Noun(NameForms),
+    // bdv., mot. g., vns. vard.
+    Adjective(NameForms),
+    // vksm., es. l., 3 asm.
+    Verb,
+    Other,
+}
+
+impl PartOfSpeech {
+    fn noun<'a>(idents: impl Iterator<Item = &'a str>) -> Self {
+        Self::Noun(NameForms::new(idents))
+    }
+
+    fn adjective<'a>(idents: impl Iterator<Item = &'a str>) -> Self {
+        Self::Noun(NameForms::new(idents))
+    }
+
+    fn verb<'a>(mut idents: impl Iterator<Item = &'a str>) -> Self {
+        // let tense = idents.next().unwrap().parse().unwrap();
+        // let mood = idents.next().unwrap().parse().unwrap();
+        // let person = idents.next().unwrap().parse().unwrap();
+        PartOfSpeech::Verb
+    }
+}
+
+#[derive(Debug, Eq)]
+pub struct NameForms {
+    pub gender: Gender,
+    pub number: Number,
+    pub case: Case,
+}
+
+impl PartialEq for NameForms {
+    fn eq(&self, other: &Self) -> bool {
+        // Ignore gender purposely.
+        self.number == other.number && self.case == other.case
+    }
+}
+
+impl NameForms {
+    fn new<'a>(mut idents: impl Iterator<Item = &'a str>) -> Self {
+        let gender = idents.next().unwrap().parse().unwrap();
+        let number_and_case = idents.next().unwrap();
+        let (number, case) = {
+            let mut parts = number_and_case.split_whitespace();
+            let number = parts.next().unwrap().parse().unwrap();
+            let case = parts.next().unwrap().parse().unwrap();
+            (number, case)
+        };
+        NameForms {
+            gender,
+            number,
+            case,
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum Gender {
+    Masculine,
+    Feminine,
+    Neuter,
+}
+
+impl FromStr for Gender {
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "vir. g." => Ok(Gender::Masculine),
+            "mot. g." => Ok(Gender::Feminine),
+            "bev. g." => Ok(Gender::Neuter),
+            _ => Err(value.to_owned()),
+        }
+    }
+
+    type Err = String;
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum Number {
+    Singular,
+    Plural,
+}
+
+impl FromStr for Number {
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "vns." => Ok(Number::Singular),
+            "dgs." => Ok(Number::Plural),
+            _ => Err(value.to_owned()),
+        }
+    }
+
+    type Err = String;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Case {
+    Vardininkas,
+    Kilmininkas,
+    Naudininkas,
+    Galininkas,
+    Inagininkas,
+    Vietininkas,
+    Sauksmininkas,
+}
+
+impl Case {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Case::Vardininkas => "vard.",
+            Case::Kilmininkas => "kilm.",
+            Case::Naudininkas => "naud.",
+            Case::Galininkas => "gal.",
+            Case::Inagininkas => "įnag.",
+            Case::Vietininkas => "viet.",
+            Case::Sauksmininkas => "šauksm.",
+        }
+    }
+}
+
+impl FromStr for Case {
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "vard." => Ok(Case::Vardininkas),
+            "kilm." => Ok(Case::Kilmininkas),
+            "naud." => Ok(Case::Naudininkas),
+            "gal." => Ok(Case::Galininkas),
+            "įnag." => Ok(Case::Inagininkas),
+            "viet." => Ok(Case::Vietininkas),
+            "šauksm." => Ok(Case::Sauksmininkas),
+            _ => Err(value.to_owned()),
+        }
+    }
+
+    type Err = String;
 }
 
 impl From<&html_parser::Element> for GrammaticalForm {
     fn from(value: &html_parser::Element) -> Self {
+        let form = value
+            .children
+            .first()
+            .and_then(|child| child.text())
+            .unwrap_or("<Erroneous grammatical form>")
+            .to_owned();
+
+        let mut idents = form.split(", ");
+        let part_of_speech = match idents.next() {
+            Some("dkt.") => PartOfSpeech::noun(idents),
+            Some("vksm.") => PartOfSpeech::verb(idents),
+            Some("bdv.") => PartOfSpeech::adjective(idents),
+            _ => PartOfSpeech::Other,
+        };
+
         Self {
-            form: value
-                .children
-                .first()
-                .and_then(|child| child.text())
-                .unwrap_or("<Erroneous grammatical form>")
-                .to_owned(),
+            form,
+            part_of_speech,
         }
     }
 }
@@ -228,6 +381,34 @@ impl AccentuationOutput {
             accentuation_output: self,
         }
     }
+
+    pub(crate) fn find_suitable_form(
+        &self,
+        criteria: &FitCriteria,
+    ) -> Option<(&str, &GrammaticalForm)> {
+        self.variants
+            .iter()
+            .find_map(|variant| variant.matching_form(criteria))
+    }
+}
+
+impl AccentuationVariant {
+    fn matching_form(&self, criteria: &FitCriteria) -> Option<(&str, &GrammaticalForm)> {
+        self.valid_forms.iter().find_map(|form| {
+            form.matches_criteria(criteria)
+                .then_some((self.accentuated_word.as_str(), form))
+        })
+    }
+}
+
+impl GrammaticalForm {
+    fn matches_criteria(&self, criteria: &FitCriteria) -> bool {
+        self.part_of_speech == criteria.part_of_speech
+    }
+}
+
+pub(crate) struct FitCriteria {
+    pub(crate) part_of_speech: PartOfSpeech,
 }
 
 pub struct AccentuationTabled<'a> {
