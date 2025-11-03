@@ -1,4 +1,4 @@
-use lietuviu_zodynas::kirciavimas::{AccentuationError, accentuate_api, new_session};
+use lietuviu_zodynas::kirciavimas::{AccentuationError, accentuate_word};
 
 const WORD_ARG: &str = "word";
 const NEW_SESSION_ARG: &str = "new_session";
@@ -33,26 +33,11 @@ fn main() {
         return;
     };
 
-    let mut start_new_session = matches.get_flag(NEW_SESSION_ARG);
+    let start_new_session = matches.get_flag(NEW_SESSION_ARG);
 
-    loop {
-        let maybe_csrf_token = start_new_session.then(|| {
-            // Starting a new session.
-            eprintln!("Pradedama nauja sesija...");
-            new_session()
-        });
-
-        match accentuate_api(word, maybe_csrf_token) {
-            Ok(accentuated) => println!("{}", accentuated.as_tabled()),
-            Err(AccentuationError::NoSuchWord) => eprintln!("Tokio žodžio nėra!"),
-            Err(AccentuationError::SessionExpired) => {
-                eprintln!("Sesijos pasibaigė! Nauja sesija bus pradėta.");
-                start_new_session = true;
-                continue;
-            }
-            Err(AccentuationError::ServerError) => eprintln!("Serverio klaida!"),
-        };
-
-        break;
-    }
+    match accentuate_word(word, start_new_session) {
+        Ok(accentuated) => println!("{}", accentuated.as_tabled()),
+        Err(AccentuationError::NoSuchWord) => eprintln!("Tokio žodžio nėra!"),
+        Err(AccentuationError::ServerError) => eprintln!("Serverio klaida!"),
+    };
 }

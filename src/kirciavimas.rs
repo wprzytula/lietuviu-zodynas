@@ -10,7 +10,7 @@ use super::{CsrfToken, SESSION_NAME};
 const SITE_URL: &str = "https://rasyba.lietuviuzodynas.lt/kirciavimas-internetu";
 const ACCENTUATE_API_URL: &str = "https://rasyba.lietuviuzodynas.lt/api/accentuate/names";
 
-pub fn new_session() -> CsrfToken {
+fn new_session() -> CsrfToken {
     let (pipe_rx, pipe_tx) = pipe().expect("Unable to create pipe");
 
     // http --session=lietuviu-zodynas GET https://rasyba.lietuviuzodynas.lt/kirciavimas-internetu
@@ -41,10 +41,10 @@ pub fn new_session() -> CsrfToken {
     CsrfToken::new(String::from_utf8(csrf_token.stdout).expect("Failed to parse CSRF token"))
 }
 
-pub fn accentuate_api(
+fn accentuate_api(
     word: &str,
     csrf_token: Option<CsrfToken>,
-) -> Result<AccentuationOutput, AccentuationError> {
+) -> Result<AccentuationOutput, InnerAccentuationError> {
     // http --session lietuviu-zodynas POST 'https://rasyba.lietuviuzodynas.lt/api/accentuate/names' text="$WORD"
 
     let mut cmd = Command::new("http");
@@ -78,7 +78,7 @@ pub fn accentuate_api(
         String::from_utf8(http_response.stdout).expect("Failed to parse API accentuation stdout");
 
     if html.contains("CSRF token mismatch.") {
-        return Err(AccentuationError::SessionExpired);
+        return Err(InnerAccentuationError::SessionExpired);
     }
 
     let dom = html_parser::Dom::parse(&html).expect("Failed to parse HTML");
@@ -87,6 +87,35 @@ pub fn accentuate_api(
         eprintln!("Failed to parse accentuation output. DOM: {:#?}", dom);
         std::panic::resume_unwind(panic);
     })
+}
+
+pub fn accentuate_word(
+    word: &str,
+    mut start_new_session: bool,
+) -> Result<AccentuationOutput, AccentuationError> {
+    loop {
+        let maybe_csrf_token = start_new_session.then(|| {
+            // Starting a new session.
+            eprintln!("Pradedama nauja sesija...");
+            new_session()
+        });
+
+        return match accentuate_api(word, maybe_csrf_token) {
+            Ok(accentuated) => Ok(accentuated),
+            Err(InnerAccentuationError::NoSuchWord) => Err(AccentuationError::NoSuchWord),
+            Err(InnerAccentuationError::SessionExpired) => {
+                if start_new_session {
+                    // Server still rejects our request, even after starting a new session.
+                    Err(AccentuationError::ServerError)
+                } else {
+                    eprintln!("Sesijos pasibaigė! Nauja sesija bus pradėta.");
+                    start_new_session = true;
+                    continue;
+                }
+            }
+            Err(InnerAccentuationError::ServerError) => Err(AccentuationError::ServerError),
+        };
+    }
 }
 
 #[derive(Debug)]
@@ -101,14 +130,20 @@ pub struct AccentuationVariant {
 }
 
 #[derive(Debug)]
-pub enum AccentuationError {
+enum InnerAccentuationError {
     NoSuchWord,
     SessionExpired,
     ServerError,
 }
 
+#[derive(Debug)]
+pub enum AccentuationError {
+    NoSuchWord,
+    ServerError,
+}
+
 impl AccentuationOutput {
-    fn try_from_html(dom: &html_parser::Dom) -> Result<Self, AccentuationError> {
+    fn try_from_html(dom: &html_parser::Dom) -> Result<Self, InnerAccentuationError> {
         let first_child = dom.children.first().unwrap();
         if let Some(first_child_element) = first_child.element() {
             return Ok(first_child_element.into());
@@ -116,11 +151,11 @@ impl AccentuationOutput {
 
         if let Some(text) = first_child.text() {
             if text.contains("žodis nerastas") {
-                return Err(AccentuationError::NoSuchWord);
+                return Err(InnerAccentuationError::NoSuchWord);
             }
 
             if text.contains("Server Error") {
-                return Err(AccentuationError::ServerError);
+                return Err(InnerAccentuationError::ServerError);
             }
         }
 
