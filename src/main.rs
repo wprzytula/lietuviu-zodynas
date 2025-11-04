@@ -4,6 +4,8 @@ const WORD_ARG: &str = "word";
 const NEW_SESSION_ARG: &str = "new_session";
 
 fn main() {
+    let _ = tracing_subscriber::fmt().try_init();
+
     let make_cmd = || {
         clap::Command::new("Lietuvių Žodynas")
             .version("0.0.1")
