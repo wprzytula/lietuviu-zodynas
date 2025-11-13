@@ -42,8 +42,13 @@ fn main() {
 
     match accentuate_word(word, start_new_session) {
         Ok(accentuated) => println!("{}", accentuated.as_tabled()),
-        Err(AccentuationError::NoSuchWord) => eprintln!("Tokio žodžio nėra!"),
-        Err(AccentuationError::ServerError) => eprintln!("Serverio klaida!"),
+        Err(e) => {
+            match e {
+                AccentuationError::NoSuchWord => eprintln!("Tokio žodžio nėra!"),
+                AccentuationError::ServerError => eprintln!("Serverio klaida!"),
+            }
+            return;
+        }
     };
 
     zodzio_formos(word).unwrap();
