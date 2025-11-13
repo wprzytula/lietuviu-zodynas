@@ -8,8 +8,8 @@ use tabled::{Table, Tabled};
 use crate::{
     html_ext::{ElementExt as _, NodeExt as _},
     kirciavimas::{
-        AccentuationError, Case, FitCriteria, Gender, NameForms, Number, PartOfSpeech,
-        accentuate_word,
+        AccentuationError, AccentuationOutput, Case, FitCriteria, Gender, NameForms, Number,
+        PartOfSpeech, accentuate_words,
     },
 };
 
@@ -108,7 +108,7 @@ fn print_node(node: &html_parser::Node) {
 }
 
 #[derive(Debug)]
-struct Gramemas {
+pub struct Gramemas {
     words: Vec<GramemoZodis>,
 }
 
@@ -178,6 +178,24 @@ impl DeclensionTable {
     pub fn as_tabled(&self) -> DeclensionTabled<'_> {
         DeclensionTabled {
             declension_table: self,
+        }
+    }
+
+    fn accentuate(&mut self) {
+        let declensions = [
+            &mut self.vardininkas,
+            &mut self.kilmininkas,
+            &mut self.naudininkas,
+            &mut self.galininkas,
+            &mut self.inagininkas,
+            &mut self.vietininkas,
+            &mut self.sauksmininkas,
+        ];
+        let batch = CaseDeclension::batch_fetch_accentuations(&declensions).collect::<Vec<_>>();
+        for (declension, accentuation) in declensions.into_iter().zip(batch) {
+            if let Ok((vienaskaita_accentuation, daugiskaita_accentiuation)) = accentuation {
+                declension.accentuate(&vienaskaita_accentuation, &daugiskaita_accentiuation);
+            }
         }
     }
 }
@@ -252,7 +270,7 @@ impl From<&html_parser::Element> for DeclensionTable {
                 Some(expected_case)
             );
 
-            let mut declension = CaseDeclension {
+            CaseDeclension {
                 case,
                 vienaskaita: vienaskaita
                     .extract_self_or_first_child_as_text_recursive()
@@ -262,10 +280,7 @@ impl From<&html_parser::Element> for DeclensionTable {
                     .extract_self_or_first_child_as_text_recursive()
                     .unwrap()
                     .to_owned(),
-            };
-
-            declension.accentuate().unwrap();
-            declension
+            }
         }
 
         let vardininkas = unpack_case(rows.next().unwrap(), Case::Vardininkas, "V.");
@@ -296,8 +311,37 @@ struct CaseDeclension {
 }
 
 impl CaseDeclension {
-    fn accentuate(&mut self) -> Result<(), AccentuationError> {
-        let vienaskaita_accentuation = accentuate_word(&self.vienaskaita, false)?;
+    fn batch_fetch_accentuations(
+        declensions: &[&mut Self],
+    ) -> impl Iterator<Item = Result<(AccentuationOutput, AccentuationOutput), AccentuationError>>
+    {
+        let mut accentuated_batch = accentuate_words(
+            declensions.iter().flat_map(|declension| {
+                [
+                    declension.vienaskaita.as_str(),
+                    declension.daugiskaita.as_str(),
+                ]
+            }),
+            false,
+        );
+        std::iter::from_fn(move || {
+            let vienaskaita_accentuated = accentuated_batch.next()?;
+            let daugiskaita_accentuated = accentuated_batch.next()?;
+            Some(match (vienaskaita_accentuated, daugiskaita_accentuated) {
+                (Ok(vienaskaita_accentuated), Ok(daugiskaita_accentuated)) => {
+                    Ok((vienaskaita_accentuated, daugiskaita_accentuated))
+                }
+                (Err(err), _) => Err(err),
+                (_, Err(err)) => Err(err),
+            })
+        })
+    }
+
+    fn accentuate(
+        &mut self,
+        vienaskaita_accentuation: &AccentuationOutput,
+        daugiskaita_accentuation: &AccentuationOutput,
+    ) {
         if let Some((vienaskaita_accentuated, _suitable_form)) = vienaskaita_accentuation
             .find_suitable_form(&FitCriteria {
                 part_of_speech: PartOfSpeech::Noun(NameForms {
@@ -310,9 +354,8 @@ impl CaseDeclension {
             self.vienaskaita = vienaskaita_accentuated.to_owned();
         }
 
-        let daugiskaita = accentuate_word(&self.daugiskaita, false)?;
-        if let Some((daugiskaita_accentuated, _suitable_form)) =
-            daugiskaita.find_suitable_form(&FitCriteria {
+        if let Some((daugiskaita_accentuated, _suitable_form)) = daugiskaita_accentuation
+            .find_suitable_form(&FitCriteria {
                 part_of_speech: PartOfSpeech::Noun(NameForms {
                     gender: Gender::Neuter, // This shall be ignored.
                     number: Number::Plural,
@@ -322,8 +365,6 @@ impl CaseDeclension {
         {
             self.daugiskaita = daugiskaita_accentuated.to_owned();
         }
-
-        Ok(())
     }
 }
 
@@ -359,9 +400,8 @@ impl MorfologyOutput {
         );
 
         let gramemas = Gramemas::from(gramemas);
-        dbg!(&gramemas);
 
-        without_ads.clone().for_each(|node| print_node(node));
+        // without_ads.clone().for_each(|node| print_node(node));
 
         let declension_table_html = without_ads
             .next()
@@ -373,8 +413,11 @@ impl MorfologyOutput {
             .unwrap()
             .element()
             .unwrap();
-        let declension_table = DeclensionTable::from(declension_table_html);
-        dbg!(&declension_table);
+        let mut declension_table = DeclensionTable::from(declension_table_html);
+        // dbg!(&declension_table);
+        println!("{}", declension_table.as_tabled());
+
+        declension_table.accentuate();
         println!("{}", declension_table.as_tabled());
 
         Ok(Self { gramemas })

@@ -1,4 +1,7 @@
-use lietuviu_zodynas::kirciavimas::{AccentuationError, accentuate_word};
+use lietuviu_zodynas::{
+    kirciavimas::{AccentuationError, accentuate_word},
+    zodzio_formos::zodzio_formos,
+};
 
 const WORD_ARG: &str = "word";
 const NEW_SESSION_ARG: &str = "new_session";
@@ -42,4 +45,6 @@ fn main() {
         Err(AccentuationError::NoSuchWord) => eprintln!("Tokio žodžio nėra!"),
         Err(AccentuationError::ServerError) => eprintln!("Serverio klaida!"),
     };
+
+    zodzio_formos(word).unwrap();
 }

@@ -6,6 +6,8 @@ use std::{
     str::FromStr,
 };
 
+use either::Either;
+
 use crate::html_ext::NodeExt;
 
 use super::{CsrfToken, SESSION_NAME};
@@ -44,10 +46,7 @@ fn new_session() -> CsrfToken {
     CsrfToken::new(String::from_utf8(csrf_token.stdout).expect("Failed to parse CSRF token"))
 }
 
-fn accentuate_api(
-    word: &str,
-    csrf_token: Option<CsrfToken>,
-) -> Result<AccentuationOutput, InnerAccentuationError> {
+fn accentuate_spawn(word: &str, csrf_token: Option<&CsrfToken>) -> std::process::Child {
     // http --session lietuviu-zodynas POST 'https://rasyba.lietuviuzodynas.lt/api/accentuate/names' text="$WORD"
 
     let mut cmd = Command::new("http");
@@ -64,11 +63,18 @@ fn accentuate_api(
 
     cmd.arg(format!("text={word}"));
 
-    let http_response = cmd
-        .stdin(Stdio::null())
+    cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .output()
+        .spawn()
+        .expect("Failed to spawn http with accentuate API")
+}
+
+fn accentuate_process_output(
+    child: std::process::Child,
+) -> Result<AccentuationOutput, InnerAccentuationError> {
+    let http_response = child
+        .wait_with_output()
         .expect("Failed to wait for http with accentuate API");
 
     assert!(
@@ -92,6 +98,27 @@ fn accentuate_api(
     })
 }
 
+fn accentuate_api(
+    word: &str,
+    csrf_token: Option<&CsrfToken>,
+) -> Result<AccentuationOutput, InnerAccentuationError> {
+    let child = accentuate_spawn(word, csrf_token);
+    accentuate_process_output(child)
+}
+
+fn accentuate_batch_api<'a, I: Iterator<Item = &'a str>>(
+    words: I,
+    csrf_token: Option<&CsrfToken>,
+) -> impl Iterator<Item = Result<AccentuationOutput, InnerAccentuationError>> + use<I> {
+    let children = words
+        .map(|word| accentuate_spawn(word, csrf_token))
+        .collect::<Vec<_>>();
+
+    children
+        .into_iter()
+        .map(|child| accentuate_process_output(child))
+}
+
 pub fn accentuate_word(
     word: &str,
     mut start_new_session: bool,
@@ -103,7 +130,7 @@ pub fn accentuate_word(
             new_session()
         });
 
-        return match accentuate_api(word, maybe_csrf_token) {
+        return match accentuate_api(word, maybe_csrf_token.as_ref()) {
             Ok(accentuated) => Ok(accentuated),
             Err(InnerAccentuationError::NoSuchWord) => Err(AccentuationError::NoSuchWord),
             Err(InnerAccentuationError::SessionExpired) => {
@@ -118,6 +145,46 @@ pub fn accentuate_word(
             }
             Err(InnerAccentuationError::ServerError) => Err(AccentuationError::ServerError),
         };
+    }
+}
+
+pub fn accentuate_words<'a, I: Iterator<Item = &'a str> + Clone>(
+    words: I,
+    mut start_new_session: bool,
+) -> impl Iterator<Item = Result<AccentuationOutput, AccentuationError>> + use<I> {
+    loop {
+        let maybe_csrf_token = start_new_session.then(|| {
+            // Starting a new session.
+            eprintln!("Pradedama nauja sesija...");
+            new_session()
+        });
+
+        let batch = accentuate_batch_api(words.clone(), maybe_csrf_token.as_ref())
+            .collect::<Vec<Result<_, _>>>();
+
+        if batch.iter().any(|res| {
+            res.as_ref()
+                .is_err_and(|err| matches!(err, InnerAccentuationError::SessionExpired))
+        }) {
+            if start_new_session {
+                // Server still rejects our request, even after starting a new session.
+                return Either::Left(
+                    std::iter::repeat_with(|| Err(AccentuationError::ServerError))
+                        .take(batch.len()),
+                );
+            } else {
+                eprintln!("Sesijos pasibaigė! Nauja sesija bus pradėta.");
+                start_new_session = true;
+                continue;
+            }
+        }
+
+        return Either::Right(batch.into_iter().map(|res| match res {
+            Ok(output) => Ok(output),
+            Err(InnerAccentuationError::NoSuchWord) => Err(AccentuationError::NoSuchWord),
+            Err(InnerAccentuationError::SessionExpired) => Err(AccentuationError::ServerError),
+            Err(InnerAccentuationError::ServerError) => Err(AccentuationError::ServerError),
+        }));
     }
 }
 
@@ -386,6 +453,10 @@ impl AccentuationOutput {
         &self,
         criteria: &FitCriteria,
     ) -> Option<(&str, &GrammaticalForm)> {
+        tracing::debug!(
+            "Searching for suitable form for criteria {criteria:?} in grammatical form {self:?}"
+        );
+
         self.variants
             .iter()
             .find_map(|variant| variant.matching_form(criteria))
@@ -407,6 +478,7 @@ impl GrammaticalForm {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct FitCriteria {
     pub(crate) part_of_speech: PartOfSpeech,
 }
